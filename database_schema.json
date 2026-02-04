@@ -1,0 +1,51 @@
+{
+  "_info": {
+    "description": "DTC Tuguegarao Attendance System Database Schema",
+    "storage": "Local JSON files in data/ folder",
+    "databases": {
+      "data/registrations.json": "Stores all registration records",
+      "data/checkins.json": "Stores all check-in records"
+    },
+    "server": "Run 'node server.js' to start the server on http://localhost:3000"
+  },
+  "registrations_database": {
+    "file": "data/registrations.json",
+    "schema": {
+      "registration_number": "integer (auto-increment starting from 1)",
+      "user_id": "DT-XXXXX (auto-generated unique ID)",
+      "first_name": "string (required, min 2 chars, letters only)",
+      "middle_initial": "string (optional, single letter)",
+      "last_name": "string (required, min 2 chars, letters only)",
+      "suffix": "string (optional: Jr., Sr., II, III, IV)",
+      "email": "string (required, UNIQUE - duplicates not allowed)",
+      "gender": "Male | Female | Prefer not to say",
+      "age_group": "Under 18 | 18-24 | 25-34 | 35-44 | 45+ (auto-calculated from birthdate)",
+      "birthdate": "YYYY-MM-DD",
+      "phone": "09XXXXXXXXX (11 digits starting with 09)",
+      "nationality": "string",
+      "region": "string (Philippine region)",
+      "province": "string",
+      "city": "string",
+      "barangay": "string",
+      "building": "string (required)",
+      "street": "string (optional)",
+      "sector": "Out of school youth | Student | Teacher | Professional | Other",
+      "agency": "string (required)",
+      "office": "string (required)",
+      "designation": "string (required)",
+      "senior_citizen": "Yes | No",
+      "differently_abled": "Yes | No",
+      "solo_parent": "Yes | No",
+      "civil_status": "Single | Married | Widowed | Divorced | Separated | Annulled | Domestic Partnership",
+      "registered_at": "ISO 8601 timestamp"
+    }
+  },
+  "checkins_database": {
+    "file": "data/checkins.json",
+    "schema": {
+      "user_id": "DT-XXXXX (must exist in registrations database)",
+      "services": "comma-separated: Printing, PC Use, Training",
+      "checkin_at": "ISO 8601 timestamp"
+    }
+  }
+}
