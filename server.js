@@ -5,14 +5,61 @@ const path = require('path');
 const PORT = 3000;
 const DATA_DIR = path.join(__dirname, 'data');
 
-// Ensure data directory exists
-if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
+// Directory structure for registrations and checkins
+const REGISTRATIONS_DIR = path.join(DATA_DIR, 'registrations');
+const REGISTRATIONS_TOTAL_DIR = path.join(REGISTRATIONS_DIR, 'total');
+const REGISTRATIONS_DAILY_DIR = path.join(REGISTRATIONS_DIR, 'daily');
+
+const CHECKINS_DIR = path.join(DATA_DIR, 'checkins');
+const CHECKINS_TOTAL_DIR = path.join(CHECKINS_DIR, 'total');
+const CHECKINS_DAILY_DIR = path.join(CHECKINS_DIR, 'daily');
+
+// Ensure all data directories exist
+[DATA_DIR, REGISTRATIONS_DIR, REGISTRATIONS_TOTAL_DIR, REGISTRATIONS_DAILY_DIR,
+ CHECKINS_DIR, CHECKINS_TOTAL_DIR, CHECKINS_DAILY_DIR].forEach(dir => {
+    if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+    }
+});
+
+// Get today's date string for daily files
+function getTodayDateString() {
+    const today = new Date();
+    return today.toISOString().split('T')[0]; // YYYY-MM-DD format
 }
 
 // Initialize database files if they don't exist
-const REGISTRATIONS_FILE = path.join(DATA_DIR, 'registrations.json');
-const CHECKINS_FILE = path.join(DATA_DIR, 'checkins.json');
+const REGISTRATIONS_FILE = path.join(REGISTRATIONS_TOTAL_DIR, 'registrations.json');
+const CHECKINS_FILE = path.join(CHECKINS_TOTAL_DIR, 'checkins.json');
+
+// Get daily file paths
+function getDailyRegistrationsFile() {
+    return path.join(REGISTRATIONS_DAILY_DIR, `registrations_${getTodayDateString()}.json`);
+}
+
+function getDailyCheckinsFile() {
+    return path.join(CHECKINS_DAILY_DIR, `checkins_${getTodayDateString()}.json`);
+}
+
+// Migrate old data files to new structure if they exist
+const OLD_REGISTRATIONS_FILE = path.join(DATA_DIR, 'registrations.json');
+const OLD_CHECKINS_FILE = path.join(DATA_DIR, 'checkins.json');
+
+if (fs.existsSync(OLD_REGISTRATIONS_FILE) && !fs.existsSync(REGISTRATIONS_FILE)) {
+    console.log('Migrating old registrations.json to new folder structure...');
+    const oldData = fs.readFileSync(OLD_REGISTRATIONS_FILE, 'utf8');
+    fs.writeFileSync(REGISTRATIONS_FILE, oldData, 'utf8');
+    fs.renameSync(OLD_REGISTRATIONS_FILE, OLD_REGISTRATIONS_FILE + '.backup');
+    console.log('Migration complete. Old file backed up as registrations.json.backup');
+}
+
+if (fs.existsSync(OLD_CHECKINS_FILE) && !fs.existsSync(CHECKINS_FILE)) {
+    console.log('Migrating old checkins.json to new folder structure...');
+    const oldData = fs.readFileSync(OLD_CHECKINS_FILE, 'utf8');
+    fs.writeFileSync(CHECKINS_FILE, oldData, 'utf8');
+    fs.renameSync(OLD_CHECKINS_FILE, OLD_CHECKINS_FILE + '.backup');
+    console.log('Migration complete. Old file backed up as checkins.json.backup');
+}
 
 if (!fs.existsSync(REGISTRATIONS_FILE)) {
     fs.writeFileSync(REGISTRATIONS_FILE, '[]', 'utf8');
@@ -122,7 +169,7 @@ const server = http.createServer(async (req, res) => {
                 const maxRegNum = registrations.length > 0 
                     ? Math.max(...registrations.map(r => r.registration_number || 0)) 
                     : 0;
-                body.registration_number = maxRegNum + 1;
+                const registrationNumber = maxRegNum + 1;
                 
                 // Generate user ID
                 let maxIdNum = 0;
@@ -135,14 +182,34 @@ const server = http.createServer(async (req, res) => {
                         }
                     }
                 });
-                body.user_id = 'DT-' + (maxIdNum + 1).toString(36).toUpperCase().padStart(5, '0');
-                body.registered_at = new Date().toISOString();
+                const userId = 'DT-' + (maxIdNum + 1).toString(36).toUpperCase().padStart(5, '0');
+                const registeredAt = new Date().toISOString();
                 
-                registrations.push(body);
+                // Create record with registration_number as first field
+                const newRecord = {
+                    registration_number: registrationNumber,
+                    user_id: userId,
+                    registered_at: registeredAt,
+                    ...body
+                };
                 
-                if (writeDatabase(REGISTRATIONS_FILE, registrations)) {
+                registrations.push(newRecord);
+                
+                // Save to total file
+                const savedToTotal = writeDatabase(REGISTRATIONS_FILE, registrations);
+                
+                // Save to daily file
+                const dailyFile = getDailyRegistrationsFile();
+                let dailyRegistrations = [];
+                if (fs.existsSync(dailyFile)) {
+                    dailyRegistrations = readDatabase(dailyFile);
+                }
+                dailyRegistrations.push(newRecord);
+                writeDatabase(dailyFile, dailyRegistrations);
+                
+                if (savedToTotal) {
                     res.writeHead(201);
-                    res.end(JSON.stringify({ success: true, data: body }));
+                    res.end(JSON.stringify({ success: true, data: newRecord }));
                 } else {
                     res.writeHead(500);
                     res.end(JSON.stringify({ error: 'Failed to save registration' }));
@@ -164,23 +231,44 @@ const server = http.createServer(async (req, res) => {
                 const registrations = readDatabase(REGISTRATIONS_FILE);
                 const checkins = readDatabase(CHECKINS_FILE);
                 
-                // Verify user ID exists
-                const userExists = registrations.some(r => 
+                // Verify user ID exists and get registration number
+                const userRecord = registrations.find(r => 
                     r.user_id && r.user_id.toUpperCase() === body.user_id.toUpperCase()
                 );
                 
-                if (!userExists) {
+                if (!userRecord) {
                     res.writeHead(400);
                     res.end(JSON.stringify({ error: 'User ID not found', code: 'USER_NOT_FOUND' }));
                     return;
                 }
                 
-                body.checkin_at = new Date().toISOString();
-                checkins.push(body);
+                const checkinAt = new Date().toISOString();
                 
-                if (writeDatabase(CHECKINS_FILE, checkins)) {
+                // Create record with registration_number as first field
+                const newCheckin = {
+                    registration_number: userRecord.registration_number,
+                    user_id: body.user_id,
+                    checkin_at: checkinAt,
+                    services: body.services
+                };
+                
+                checkins.push(newCheckin);
+                
+                // Save to total file
+                const savedToTotal = writeDatabase(CHECKINS_FILE, checkins);
+                
+                // Save to daily file
+                const dailyFile = getDailyCheckinsFile();
+                let dailyCheckins = [];
+                if (fs.existsSync(dailyFile)) {
+                    dailyCheckins = readDatabase(dailyFile);
+                }
+                dailyCheckins.push(newCheckin);
+                writeDatabase(dailyFile, dailyCheckins);
+                
+                if (savedToTotal) {
                     res.writeHead(201);
-                    res.end(JSON.stringify({ success: true, data: body }));
+                    res.end(JSON.stringify({ success: true, data: newCheckin }));
                 } else {
                     res.writeHead(500);
                     res.end(JSON.stringify({ error: 'Failed to save check-in' }));
@@ -248,20 +336,22 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
-    console.log('╔════════════════════════════════════════════════════════════╗');
-    console.log('║                                                            ║');
-    console.log('║   DTC Tuguegarao Attendance System Server                  ║');
-    console.log('║                                                            ║');
-    console.log(`║   Server running at: http://localhost:${PORT}                 ║`);
-    console.log('║                                                            ║');
-    console.log('║   Main Form:    http://localhost:3000                      ║');
-    console.log('║   Admin Panel:  http://localhost:3000/admin.html           ║');
-    console.log('║                                                            ║');
-    console.log('║   Database files saved in: ./data/                         ║');
-    console.log('║   - registrations.json                                     ║');
-    console.log('║   - checkins.json                                          ║');
-    console.log('║                                                            ║');
-    console.log('║   Press Ctrl+C to stop the server                          ║');
-    console.log('║                                                            ║');
-    console.log('╚════════════════════════════════════════════════════════════╝');
+    console.log('╔════════════════════════════════════════════════════════════════╗');
+    console.log('║                                                                ║');
+    console.log('║   DTC Tuguegarao Attendance System Server                      ║');
+    console.log('║                                                                ║');
+    console.log(`║   Server running at: http://localhost:${PORT}                     ║`);
+    console.log('║                                                                ║');
+    console.log('║   Main Form:    http://localhost:3000                          ║');
+    console.log('║   Admin Panel:  http://localhost:3000/admin.html               ║');
+    console.log('║                                                                ║');
+    console.log('║   Database files saved in: ./data/                             ║');
+    console.log('║   - registrations/total/registrations.json  (all-time)         ║');
+    console.log('║   - registrations/daily/registrations_YYYY-MM-DD.json          ║');
+    console.log('║   - checkins/total/checkins.json  (all-time)                   ║');
+    console.log('║   - checkins/daily/checkins_YYYY-MM-DD.json                    ║');
+    console.log('║                                                                ║');
+    console.log('║   Press Ctrl+C to stop the server                              ║');
+    console.log('║                                                                ║');
+    console.log('╚════════════════════════════════════════════════════════════════╝');
 });
